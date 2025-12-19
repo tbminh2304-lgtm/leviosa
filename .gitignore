@@ -1,0 +1,9 @@
+uploads/
+outputs/
+*.mp4
+*.wav
+*.avi
+*.mov
+*.mkv
+__pycache__/
+.env
