@@ -1,6 +1,5 @@
-flask
-gunicorn
+Flask
 openai-whisper
 ffmpeg-python
-torch==2.0.0
-numpy
+torch
+gunicorn
