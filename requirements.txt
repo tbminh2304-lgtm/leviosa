@@ -2,4 +2,5 @@ Flask
 openai-whisper
 ffmpeg-python
 torch
+numpy<2
 gunicorn
