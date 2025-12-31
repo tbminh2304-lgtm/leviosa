@@ -1,19 +1,21 @@
-import os, uuid
+import os
+import uuid
 import whisper
 import ffmpeg
 from flask import Flask, render_template, request
 
 app = Flask(__name__)
 
+# ===== THƯ MỤC =====
 UPLOAD_DIR = "static/uploads"
 OUTPUT_DIR = "static/outputs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Whisper gốc – dùng medium cho tiếng Việt
+# ===== LOAD WHISPER (TIẾNG VIỆT) =====
 model = whisper.load_model("medium")
 
-
+# ===== HÀM CHUYỂN THỜI GIAN SANG SRT =====
 def srt_time(t):
     h = int(t // 3600)
     m = int((t % 3600) // 60)
@@ -22,6 +24,7 @@ def srt_time(t):
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
 
+# ===== ROUTE TRANG CHÍNH =====
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -38,7 +41,7 @@ def index():
 
         video.save(input_video)
 
-        # 1️⃣ Tách audio
+        # ===== 1️⃣ TÁCH ÂM THANH =====
         ffmpeg.input(input_video).output(
             audio_file,
             ac=1,
@@ -46,21 +49,20 @@ def index():
             format="wav"
         ).run(overwrite_output=True)
 
-        # 2️⃣ Whisper
+        # ===== 2️⃣ NHẬN DIỆN GIỌNG NÓI =====
         result = model.transcribe(audio_file, language="vi", verbose=False)
         segments = result["segments"]
 
-        # 3️⃣ Text liền
+        # ===== 3️⃣ GHÉP TEXT =====
         full_text = " ".join([s["text"].strip() for s in segments])
 
-        # 4️⃣ Tạo SRT
+        # ===== 4️⃣ TẠO FILE SRT =====
         with open(srt_file, "w", encoding="utf-8") as f:
             for i, s in enumerate(segments, 1):
                 f.write(
                     f"{i}\n"
                     f"{srt_time(s['start'])} --> {srt_time(s['end'])}\n"
-                   f"{s['text'].strip()}\n\n"
-
+                    f"{s['text'].strip()}\n\n"
                 )
 
         return render_template(
@@ -74,6 +76,7 @@ def index():
     return render_template("index.html")
 
 
+# ===== ROUTE GẮN PHỤ ĐỀ VÀO VIDEO =====
 @app.route("/burn/<video_id>")
 def burn(video_id):
     input_video = f"{UPLOAD_DIR}/{video_id}.mp4"
@@ -99,6 +102,6 @@ def burn(video_id):
     )
 
 
+# ===== CHẠY APP =====
 if __name__ == "__main__":
-    if __name__ == "__main__":
     app.run()
