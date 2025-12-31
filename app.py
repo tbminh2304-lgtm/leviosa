@@ -13,7 +13,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ===== LOAD WHISPER (TIẾNG VIỆT) =====
-model = whisper.load_model("medium")
+model = whisper.load_model("small")
 
 # ===== HÀM CHUYỂN THỜI GIAN SANG SRT =====
 def srt_time(t):
