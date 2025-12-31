@@ -1,129 +1,104 @@
-from flask import Flask, render_template, request, send_from_directory
-import os
+import os, uuid
 import whisper
-import uuid
-import re
-import subprocess
+import ffmpeg
+from flask import Flask, render_template, request
 
 app = Flask(__name__)
 
-UPLOAD_FOLDER = "uploads"
-OUTPUT_FOLDER = "outputs"
+UPLOAD_DIR = "static/uploads"
+OUTPUT_DIR = "static/outputs"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-# Load Whisper model (Render Free nên dùng base)
-model = whisper.load_model("base")
+# Whisper gốc – dùng medium cho tiếng Việt
+model = whisper.load_model("medium")
 
 
-def format_time(seconds):
-    """Chuyển đổi giây thành định dạng thời gian HH:MM:SS,SSS"""
-    ms = int((seconds - int(seconds)) * 1000)
-    s = int(seconds) % 60
-    m = int(seconds) // 60 % 60
-    h = int(seconds) // 3600
+def srt_time(t):
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    ms = int((t - int(t)) * 1000)
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
-
-def split_text_to_fake_segments(text):
-    """Fallback: tách câu khi Whisper không trả segments"""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    segments = []
-    t = 0.0
-    for s in sentences:
-        if s.strip():
-            segments.append({
-                "start": t,
-                "end": t + 2.5,
-                "text": s
-            })
-            t += 2.5
-    return segments
 
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    text = ""
-    subtitles = []
-    mode = "text"
-    error = None
-    video_path = None
-
     if request.method == "POST":
         mode = request.form.get("mode", "text")
-        video = request.files["video"]
+        video = request.files.get("video")
 
-        # Lưu video
-        video_filename = f"{uuid.uuid4()}_{video.filename}"
-        video_path = os.path.join(UPLOAD_FOLDER, video_filename)
-        video.save(video_path)
+        if not video:
+            return render_template("index.html", error="❌ Chưa chọn video")
 
-        # Tạo file audio từ video
-        audio_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.wav")
+        uid = str(uuid.uuid4())
+        input_video = f"{UPLOAD_DIR}/{uid}.mp4"
+        audio_file = f"{UPLOAD_DIR}/{uid}.wav"
+        srt_file = f"{OUTPUT_DIR}/{uid}.srt"
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", video_path,
-            "-vn",
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",
-            "-ac", "1",
-            audio_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        video.save(input_video)
 
-        if not os.path.exists(audio_path):
-            error = "Không tách được âm thanh từ video"
-            return render_template("index.html", error=error)
+        # 1️⃣ Tách audio
+        ffmpeg.input(input_video).output(
+            audio_file,
+            ac=1,
+            ar=16000,
+            format="wav"
+        ).run(overwrite_output=True)
 
-        try:
-            result = model.transcribe(
-                audio_path,
-                language="vi",
-                fp16=False,
-                condition_on_previous_text=False,
-                verbose=False
-            )
+        # 2️⃣ Whisper
+        result = model.transcribe(audio_file, language="vi", verbose=False)
+        segments = result["segments"]
 
-            text = result.get("text", "").strip()
+        # 3️⃣ Text liền
+        full_text = " ".join([s["text"].strip() for s in segments])
 
-            if mode == "subtitle":
-                segments = result.get("segments", [])
+        # 4️⃣ Tạo SRT
+        with open(srt_file, "w", encoding="utf-8") as f:
+            for i, s in enumerate(segments, 1):
+                f.write(
+                    f"{i}\n"
+                    f"{srt_time(s['start'])} --> {srt_time(s['end'])}\n"
+                   f"{s['text'].strip()}\n\n"
 
-                if not segments:
-                    segments = split_text_to_fake_segments(text)
+                )
 
-                subtitles = segments
+        return render_template(
+            "index.html",
+            mode=mode,
+            text=full_text,
+            subtitles=segments,
+            video_id=uid
+        )
 
-                # Ghi file SRT
-                srt_path = os.path.join(OUTPUT_FOLDER, "leviosa_subtitles.srt")
-                with open(srt_path, "w", encoding="utf-8") as f:
-                    for i, seg in enumerate(subtitles, 1):
-                        f.write(f"{i}\n")
-                        f.write(
-                            f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n"
-                        )
-                        f.write(seg["text"].strip() + "\n\n")
+    return render_template("index.html")
 
-        except Exception as e:
-            error = f"Lỗi Whisper: {str(e)}"
+
+@app.route("/burn/<video_id>")
+def burn(video_id):
+    input_video = f"{UPLOAD_DIR}/{video_id}.mp4"
+    srt_file = f"{OUTPUT_DIR}/{video_id}.srt"
+    output_video = f"{OUTPUT_DIR}/{video_id}_sub.mp4"
+
+    srt_ffmpeg = srt_file.replace("\\", "/")
+
+    ffmpeg.input(input_video).output(
+        output_video,
+        vf=(
+            f"subtitles='{srt_ffmpeg}':"
+            "force_style='FontName=Arial,FontSize=26,"
+            "PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=1'"
+        ),
+        vcodec="libx264",
+        acodec="aac"
+    ).run(overwrite_output=True)
 
     return render_template(
         "index.html",
-        text=text,
-        subtitles=subtitles,
-        mode=mode,
-        error=error,
-        video_path=video_path
+        final_video_path=f"/static/outputs/{video_id}_sub.mp4"
     )
 
 
-@app.route("/outputs/<filename>")
-def download_file(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
-
-
 if __name__ == "__main__":
-    app.run(debug=True)
+    if __name__ == "__main__":
+    app.run()
